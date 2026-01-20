@@ -1,10 +1,10 @@
 # agents/gemini_agent.py
 import os
 import glob
-from flask.cli import load_dotenv
+# from flask.cli import load_dotenv
 from google import genai
-import dotenv
-# Initialize Gemini client
+from dotenv import load_dotenv
+# Initialize Gemini client  
 load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
@@ -15,7 +15,7 @@ def get_code_files_content(directory):
     py_files = glob.glob(os.path.join(directory, "**", "*.py"), recursive=True)
 
     for file_path in py_files:
-        if "venv/" in file_path or "site-packages/" in file_path:
+        if file_path in ["__pycache__/","venv/"," .git/", "node_modules/", "site-packages/"]:
             continue
 
         try:
@@ -71,7 +71,7 @@ Here is the code:
                 "temperature": 0.2,
                 "top_p": 1,
                 "top_k": 1,
-                "max_output_tokens": 2048,
+                # "max_output_tokens": 2048,
             },
         )
 

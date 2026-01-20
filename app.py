@@ -1,77 +1,11 @@
-from flask import Flask, request, jsonify
-import git
-import tempfile
-import shutil
-import json
-
-from agents.code_quality_agent import analyze_code 
-
-# app = Flask(__name__)
-
-# @app.route('/webhook', methods=['POST'])
-# def github_webhook():
-#     event = request.headers.get('X-GitHub-Event')
-
-#     data = request.get_json(silent=True)
-#     if data is None:
-#         data = request.form.to_dict()
-
-#     if event == 'pull_request':
-#         # print("Received pull request event", data)
-#         payload = data.get('payload')
-#         payload = json.loads(payload)
-#         action = payload.get('action')
-#         print("Action: ", action)
-
-#         if action in ['opened', 'synchronize', 'reopened', 'closed']:
-#             print(f"Pull request {action} for PR #{payload.get('number')}")
-#             process_pull_request(payload)
-
-#         return jsonify({'status': 'success'}), 200
-
-#     return jsonify({'status': 'unhandled_event'}), 200
-
-
-# # ... (inside process_pull_request)
-# def process_pull_request(pr_data):
-#     repo_url = pr_data['repository']['clone_url']
-#     branch_name = pr_data['pull_request']['head']['ref']
-
-#     # Create a temporary directory to clone the repo
-#     with tempfile.TemporaryDirectory() as temp_dir:
-#         print(f"Cloning {repo_url} into {temp_dir}")
-#         repo = git.Repo.clone_from(repo_url, temp_dir)
-#         repo.git.checkout(branch_name)
-
-#         # Now you have the code, you can run an agent on it
-#         run_code_quality_agent(temp_dir)
-
-# def run_code_quality_agent(repo_path):
-#     # Placeholder for the agent's logic
-#     print(f"Running code quality checks on {repo_path}")
-#     issues = analyze_code(repo_path)
-#     if issues:
-#         print("Code quality issues found:")
-#         for issue in issues:
-#             print(f"- {issue['message']} in {issue['path']} at line {issue['line']}")
-#     else:
-#         print("No code quality issues found.")
-
-
-# if __name__ == '__main__':
-#     app.run(port=5000, debug=True)
-
-
-
-
 
 import os
 import git
 import tempfile
-import shutil
 import requests
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
+import json
 
 # Import BOTH agent functions
 from agents.code_quality_agent import analyze_code
@@ -90,7 +24,7 @@ def post_comment_to_pr(repo_full_name, pr_number, comment_body):
         return
 
     url = f"https://api.github.com/repos/{repo_full_name}/issues/{pr_number}/comments"
-    headers = {'Authorization': f'token {GITHUB_TOKEN}', 'Accept': 'application/vnd.github.v3+json'}
+    headers = {'Authorization': f'token {GITHUB_TOKEN}', 'Accept': 'application/vnd.github+json'}
     data = {'body': comment_body}
     
     response = requests.post(url, headers=headers, json=data)
@@ -114,19 +48,6 @@ def process_pull_request(pr_data):
         print(f"Cloning {clone_url}, branch '{branch_name}' into {temp_dir}")
         try:
             git.Repo.clone_from(clone_url, temp_dir, branch=branch_name)
-
-            # --- Agent Execution ---
-            # 1. Run Pylint Agent (Code Quality)
-            print("Running Code Quality Agent (Pylint)...")
-            pylint_issues = analyze_code(temp_dir)
-            if pylint_issues:
-                report = "### 📊 Code Quality Report (Pylint)\n\n"
-                pylint_issues.sort(key=lambda x: (x['path'], x['line']))
-                for issue in pylint_issues:
-                    report += f"- **{issue['message-id']}**: {issue['message']} in `{issue['path']}` at line {issue['line']}\n"
-                reports.append(report)
-            else:
-                reports.append("### 📊 Code Quality Report (Pylint)\n\n✅ No static analysis issues found. Well done!")
 
             # 2. Run Gemini Agent (AI Review)
             print("Running AI Code Review Agent (Gemini)...")
