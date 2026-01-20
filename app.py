@@ -1,30 +1,167 @@
 from flask import Flask, request, jsonify
+import git
+import tempfile
+import shutil
+import json
+
+from agents.code_quality_agent import analyze_code 
+
+# app = Flask(__name__)
+
+# @app.route('/webhook', methods=['POST'])
+# def github_webhook():
+#     event = request.headers.get('X-GitHub-Event')
+
+#     data = request.get_json(silent=True)
+#     if data is None:
+#         data = request.form.to_dict()
+
+#     if event == 'pull_request':
+#         # print("Received pull request event", data)
+#         payload = data.get('payload')
+#         payload = json.loads(payload)
+#         action = payload.get('action')
+#         print("Action: ", action)
+
+#         if action in ['opened', 'synchronize', 'reopened', 'closed']:
+#             print(f"Pull request {action} for PR #{payload.get('number')}")
+#             process_pull_request(payload)
+
+#         return jsonify({'status': 'success'}), 200
+
+#     return jsonify({'status': 'unhandled_event'}), 200
+
+
+# # ... (inside process_pull_request)
+# def process_pull_request(pr_data):
+#     repo_url = pr_data['repository']['clone_url']
+#     branch_name = pr_data['pull_request']['head']['ref']
+
+#     # Create a temporary directory to clone the repo
+#     with tempfile.TemporaryDirectory() as temp_dir:
+#         print(f"Cloning {repo_url} into {temp_dir}")
+#         repo = git.Repo.clone_from(repo_url, temp_dir)
+#         repo.git.checkout(branch_name)
+
+#         # Now you have the code, you can run an agent on it
+#         run_code_quality_agent(temp_dir)
+
+# def run_code_quality_agent(repo_path):
+#     # Placeholder for the agent's logic
+#     print(f"Running code quality checks on {repo_path}")
+#     issues = analyze_code(repo_path)
+#     if issues:
+#         print("Code quality issues found:")
+#         for issue in issues:
+#             print(f"- {issue['message']} in {issue['path']} at line {issue['line']}")
+#     else:
+#         print("No code quality issues found.")
+
+
+# if __name__ == '__main__':
+#     app.run(port=5000, debug=True)
+
+
+
+
+
+import os
+import git
+import tempfile
+import shutil
+import requests
+from flask import Flask, request, jsonify
+from dotenv import load_dotenv
+
+# Import BOTH agent functions
+from agents.code_quality_agent import analyze_code
+from agents.gemini_agent import review_code_with_gemini
+
+# Load environment variables
+load_dotenv()
+GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 
 app = Flask(__name__)
 
-@app.route('/webhook', methods=['POST'])
-def github_webhook():
-    if request.headers.get('X-GitHub-Event') == 'pull_request':
-        data = request.json
-        action = data.get('action')
+def post_comment_to_pr(repo_full_name, pr_number, comment_body):
+    """Posts a single, consolidated comment to a GitHub pull request."""
+    if not GITHUB_TOKEN:
+        print("GITHUB_TOKEN not set. Cannot post comment.")
+        return
 
-        if action in ['opened', 'synchronize']:
-            print(f"Pull request {action} for PR #{data['number']}")
-            # This is where you will trigger your agents later
-            process_pull_request(data)
-
-        return jsonify({'status': 'success'}), 200
-    return jsonify({'status': 'unhandled_event'}), 200
+    url = f"https://api.github.com/repos/{repo_full_name}/issues/{pr_number}/comments"
+    headers = {'Authorization': f'token {GITHUB_TOKEN}', 'Accept': 'application/vnd.github.v3+json'}
+    data = {'body': comment_body}
+    
+    response = requests.post(url, headers=headers, json=data)
+    if response.status_code == 201:
+        print(f"Successfully posted consolidated comment to PR #{pr_number}.")
+    else:
+        print(f"Failed to post comment: {response.status_code} - {response.text}")
 
 def process_pull_request(pr_data):
-    # Placeholder for your agent logic
-    print("Processing pull request...")
-    pr_number = pr_data['pull_request']['number']
-    repo_full_name = pr_data['repository']['full_name']
-    head_sha = pr_data['pull_request']['head']['sha']
+    """Clones the PR's branch and triggers all agents."""
 
-    # TODO: Clone the repo, checkout the branch, and run agents
-    print(f"Repo: {repo_full_name}, PR: {pr_number}, SHA: {head_sha}")
+    repo_full_name = pr_data['repository']['full_name']
+    # clone_url = pr_data['repository']['clone_url']
+    clone_url = f"https://x-access-token:{GITHUB_TOKEN}@github.com/{repo_full_name}.git"
+    branch_name = pr_data['pull_request']['head']['ref']
+    pr_number = pr_data['pull_request']['number']
+
+    reports = [] # A list to hold reports from all agents
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        print(f"Cloning {clone_url}, branch '{branch_name}' into {temp_dir}")
+        try:
+            git.Repo.clone_from(clone_url, temp_dir, branch=branch_name)
+
+            # --- Agent Execution ---
+            # 1. Run Pylint Agent (Code Quality)
+            print("Running Code Quality Agent (Pylint)...")
+            pylint_issues = analyze_code(temp_dir)
+            if pylint_issues:
+                report = "### 📊 Code Quality Report (Pylint)\n\n"
+                pylint_issues.sort(key=lambda x: (x['path'], x['line']))
+                for issue in pylint_issues:
+                    report += f"- **{issue['message-id']}**: {issue['message']} in `{issue['path']}` at line {issue['line']}\n"
+                reports.append(report)
+            else:
+                reports.append("### 📊 Code Quality Report (Pylint)\n\n✅ No static analysis issues found. Well done!")
+
+            # 2. Run Gemini Agent (AI Review)
+            print("Running AI Code Review Agent (Gemini)...")
+            gemini_review = review_code_with_gemini(temp_dir)
+            reports.append(f"### 🧠 AI Code Review (Gemini)\n\n{gemini_review}")
+
+        except git.exc.GitCommandError as e:
+            print(f"Error cloning repository: {e}")
+            reports.append(f"### ❌ Error\n\nCould not clone the repository to perform analysis. Please check permissions. Error: `{e}`")
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}")
+            reports.append(f"### ❌ Error\n\nAn unexpected error occurred during analysis: `{e}`")
+
+    # --- Consolidate and Post Comment ---
+    final_comment = "## 🤖 DevSecOps Assistant Report\n\n"
+    final_comment += "\n---\n".join(reports)
+    post_comment_to_pr(repo_full_name, pr_number, final_comment)
+
+# Your existing /webhook route...
+@app.route('/webhook', methods=['POST'])
+def github_webhook():
+    
+    data = request.get_json(silent=True)
+    if data is None:
+        data = request.form.to_dict()
+    if request.headers.get('X-GitHub-Event') == 'pull_request':
+        payload = json.loads(data.get('payload'))
+        action = payload.get('action')
+
+        if action in ['opened', 'synchronize']:
+            print(f"Pull request '{action}' for PR #{payload['number']}. Triggering analysis.")
+            process_pull_request(payload)
+            return jsonify({'status': f'success, processed PR #{payload["number"]}'}), 200
+
+    return jsonify({'status': 'unhandled_event'}), 200
 
 
 if __name__ == '__main__':
