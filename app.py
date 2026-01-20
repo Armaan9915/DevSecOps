@@ -156,7 +156,7 @@ def github_webhook():
         payload = json.loads(data.get('payload'))
         action = payload.get('action')
 
-        if action in ['opened', 'synchronize']:
+        if action in ['opened', 'synchronize', 'reopened']:
             print(f"Pull request '{action}' for PR #{payload['number']}. Triggering analysis.")
             process_pull_request(payload)
             return jsonify({'status': f'success, processed PR #{payload["number"]}'}), 200

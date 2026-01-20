@@ -1,2 +1,5 @@
 venv/
 .env
+
+## add pycache
+__pycache__/
