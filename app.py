@@ -1,70 +1,96 @@
-
 import os
 import git
 import tempfile
 import requests
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
+import concurrent.futures # Import the library for parallel execution
 import json
 
-# Import BOTH agent functions
-from agents.code_quality_agent import analyze_code
-from agents.gemini_agent import review_code_with_gemini
+from agents.security_agent import analyze_code_for_security
+from agents.best_practices_agent import analyze_for_best_practices
+from gemini_wrapper import call_gemini_with_retry
 
-# Load environment variables
 load_dotenv()
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 
 app = Flask(__name__)
 
-def post_comment_to_pr(repo_full_name, pr_number, comment_body):
-    """Posts a single, consolidated comment to a GitHub pull request."""
-    if not GITHUB_TOKEN:
-        print("GITHUB_TOKEN not set. Cannot post comment.")
-        return
+# ... (get_code_changes_from_diff and post_comment_to_pr functions remain the same) ...
 
-    url = f"https://api.github.com/repos/{repo_full_name}/issues/{pr_number}/comments"
-    headers = {'Authorization': f'token {GITHUB_TOKEN}', 'Accept': 'application/vnd.github+json'}
-    data = {'body': comment_body}
-    
-    response = requests.post(url, headers=headers, json=data)
-    if response.status_code == 201:
-        print(f"Successfully posted consolidated comment to PR #{pr_number}.")
-    else:
-        print(f"Failed to post comment: {response.status_code} - {response.text}")
+def get_code_changes_from_diff(repo, pr_data):
+    # This function is unchanged
+    try:
+        base_branch = pr_data['pull_request']['base']['ref']
+        repo.remotes.origin.fetch()
+        head_sha = pr_data['pull_request']['head']['sha']
+        diff_output = repo.git.diff(f'origin/{base_branch}', head_sha)
+        return diff_output
+    except Exception as e:
+        print(f"🔴 Error generating git diff: {e}")
+        return None
 
+def synthesize_final_review(diff, agent_reports):
+    # This function is now simplified to use the wrapper
+    print("Synthesizing final review from agent reports...")
+    context = "\n\n---\n\n".join(
+        f"**{agent}:**\n{report}" for agent, report in agent_reports.items()
+    )
+    prompt = f"""
+    You are a Principal Software Engineer responsible for delivering the final code review comment.
+    Synthesize the reports from your specialist agents into a single, coherent, well-formatted Markdown comment.
+    Acknowledge reports that found no issues. Integrate and rephrase findings from other reports.
+    Add a high-level summary of the changes based on the git diff. Conclude with a final remark.
+
+    Git Diff for context:
+    ```diff
+    {diff}
+    ```
+
+    Specialist Agent Reports:
+    {context}
+    """
+    return call_gemini_with_retry(prompt)
+
+
+# --- THE NEW PARALLEL ORCHESTRATOR LOGIC ---
 def process_pull_request(pr_data):
-    """Clones the PR's branch and triggers all agents."""
-
     repo_full_name = pr_data['repository']['full_name']
-    # clone_url = pr_data['repository']['clone_url']
-    clone_url = f"https://x-access-token:{GITHUB_TOKEN}@github.com/{repo_full_name}.git"
-    branch_name = pr_data['pull_request']['head']['ref']
     pr_number = pr_data['pull_request']['number']
-
-    reports = [] # A list to hold reports from all agents
+    final_comment = ""
+    agent_reports = {}
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        print(f"Cloning {clone_url}, branch '{branch_name}' into {temp_dir}")
         try:
-            git.Repo.clone_from(clone_url, temp_dir, branch=branch_name)
+            print(f"Cloning repo for PR #{pr_number}...")
+            repo = git.Repo.clone_from(f"https://x-access-token:{GITHUB_TOKEN}@github.com/{repo_full_name}.git", temp_dir, branch=pr_data['pull_request']['head']['ref'])
+            code_diff = get_code_changes_from_diff(repo, pr_data)
+            
+            if not code_diff:
+                final_comment = "✅ No code changes detected in this pull request."
+            else:
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future_security = executor.submit(analyze_code_for_security, code_diff)
+                    future_practices = executor.submit(analyze_for_best_practices, code_diff)
+                    agent_reports["Security Agent"] = future_security.result()
 
-            # 2. Run Gemini Agent (AI Review)
-            print("Running AI Code Review Agent (Gemini)...")
-            gemini_review = review_code_with_gemini(temp_dir)
-            reports.append(f"### 🧠 AI Code Review (Gemini)\n\n{gemini_review}")
+                    agent_reports["Best Practices Agent"] = future_practices.result()
+                final_comment = synthesize_final_review(code_diff, agent_reports)
 
-        except git.exc.GitCommandError as e:
-            print(f"Error cloning repository: {e}")
-            reports.append(f"### ❌ Error\n\nCould not clone the repository to perform analysis. Please check permissions. Error: `{e}`")
         except Exception as e:
-            print(f"An unexpected error occurred: {e}")
-            reports.append(f"### ❌ Error\n\nAn unexpected error occurred during analysis: `{e}`")
+            final_comment = f"### ❌ Assistant Error\n\nAn unexpected error occurred: `{e}`"
 
-    # --- Consolidate and Post Comment ---
-    final_comment = "## 🤖 DevSecOps Assistant Report\n\n"
-    final_comment += "\n---\n".join(reports)
     post_comment_to_pr(repo_full_name, pr_number, final_comment)
+
+def post_comment_to_pr(repo_full_name, pr_number, comment_body):
+    url = f"https://api.github.com/repos/{repo_full_name}/issues/{pr_number}/comments"
+    headers = {'Authorization': f'token {GITHUB_TOKEN}', 'Accept': 'application/vnd.github.v3+json'}
+    data = {'body': f"## 🤖 DevSecOps Assistant Report\n\n{comment_body}"}
+    response = requests.post(url, headers=headers, json=data)
+    if response.status_code == 201:
+        print(f"✅ Successfully posted final review to PR #{pr_number}.")
+    else:
+        print(f"🔴 Failed to post comment to PR #{pr_number}: {response.status_code} - {response.text}")
 
 # Your existing /webhook route...
 @app.route('/webhook', methods=['POST'])
