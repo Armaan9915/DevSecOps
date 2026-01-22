@@ -1,6 +1,6 @@
 import os
 import time
-import google.generativeai as genai
+from google import genai
 
 # Configure the API key once when the module is loaded
 # This is more efficient than configuring it on every call
@@ -8,7 +8,7 @@ try:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         print("🔴 Error: GEMINI_API_KEY not found. The wrapper will not work.")
-    genai.configure(api_key=api_key)
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 except Exception as e:
     print(f"🔴 Error configuring Gemini in wrapper: {e}")
 
@@ -17,11 +17,20 @@ def call_gemini_with_retry(prompt, max_retries=3):
     Calls the Gemini API with a specific prompt and implements exponential backoff for retries.
     This makes the calls resilient to temporary service unavailability (e.g., 503 errors).
     """
-    model = genai.GenerativeModel('gemini-pro')
+    # model = genai.GenerativeModel('gemini-pro')
     for attempt in range(max_retries):
         try:
             # Attempt to generate content
-            response = model.generate_content(prompt)
+            response = client.models.generate_content(
+                model="models/gemini-2.5-flash",
+                contents=prompt,
+                config={
+                    "temperature": 0.2,
+                    "top_p": 1,
+                    "top_k": 1,
+                    # "max_output_tokens": 2048,
+                },
+            )
             # If successful, return the text and exit the loop
             return response.text
         except Exception as e:

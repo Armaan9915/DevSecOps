@@ -1,12 +1,11 @@
 import os
 from google import genai
 
+from gemini_wrapper import call_gemini_with_retry
+
 def analyze_code_for_security(code_diff):
     """Analyzes a git diff specifically for security vulnerabilities using Gemini."""
-    try:
-        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-    except Exception as e:
-        return f"Security Agent Error: Could not configure Gemini. {e}"
+    
     
     prompt = f"""
     You are a cybersecurity expert specializing in Python. Your sole task is to analyze the following git diff for security vulnerabilities.
@@ -32,15 +31,7 @@ def analyze_code_for_security(code_diff):
     """
 
     try:
-        response = client.models.generate_content(
-            model="models/gemini-2.5-flash",
-            contents=prompt,
-            config={
-                "temperature": 0.2,
-                "top_p": 1,
-                "top_k": 1,
-            },
-        )
-        return response.text
+        response = call_gemini_with_retry(prompt)
+        return response
     except Exception as e:
         return f"Security Agent Error: An exception occurred. {e}"
