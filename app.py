@@ -1,4 +1,6 @@
 import os
+from agents.distributor_agent import analyze_and_distribute
+from all_agents import EXPERT_AGENTS
 import git
 import tempfile
 import requests
@@ -57,15 +59,15 @@ def post_comment_to_pr(repo_full_name, pr_number, agent_name, comment_body):
 
 # --- Core Logic ---
 
+# In app.py, replace the existing process_pull_request function
+
 def process_pull_request(pr_data):
     """
-    Orchestrates the analysis of a pull request. It runs agents in parallel,
-    posts a separate comment for each agent, and returns a list of the generated reports.
+    Orchestrates the analysis of a pull request using a distributor agent.
     """
     repo_full_name = pr_data['repository']['full_name']
     pr_number = pr_data['pull_request']['number']
     
-    # This list will be returned by the webhook
     json_responses = []
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -83,21 +85,31 @@ def process_pull_request(pr_data):
                 post_comment_to_pr(repo_full_name, pr_number, "DevSecOps Assistant", no_changes_report)
                 return [{'agent': 'DevSecOps Assistant', 'report': no_changes_report}]
 
-            # Use a ThreadPool to run agents concurrently
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                # Map futures to agent names to identify them later
-                future_to_agent = {
-                    executor.submit(analyze_code_for_security, code_diff): "Security Agent",
-                    executor.submit(analyze_for_best_practices, code_diff): "Best Practices Agent"
-                }
+            # --- 1. Call the Distributor Agent First ---
+            print(f"Calling Distributor Agent for PR #{pr_number}...")
+            required_agent_keys = analyze_and_distribute(code_diff)
+            print(f"Distributor decided the following agents are needed: {required_agent_keys}")
 
+            if not required_agent_keys:
+                # If the distributor returns an empty list, no review is needed.
+                no_review_needed_report = "✅ Changes are minor. No detailed review from expert agents is required."
+                post_comment_to_pr(repo_full_name, pr_number, "DevSecOps Assistant", no_review_needed_report)
+                return [{'agent': 'DevSecOps Assistant', 'report': no_review_needed_report}]
+
+            # --- 2. Run Only the Required Expert Agents ---
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future_to_agent = {}
+                for agent_key in required_agent_keys:
+                    if agent_key in EXPERT_AGENTS:
+                        agent_info = EXPERT_AGENTS[agent_key]
+                        future = executor.submit(agent_info["function"], code_diff)
+                        future_to_agent[future] = agent_info["display_name"]
+                
                 for future in concurrent.futures.as_completed(future_to_agent):
                     agent_name = future_to_agent[future]
                     try:
                         report = future.result()
-                        # 1. Post the individual comment to the PR
                         post_comment_to_pr(repo_full_name, pr_number, agent_name, report)
-                        # 2. Add the result to our list for the final JSON response
                         json_responses.append({'agent': agent_name, 'report': report})
                     except Exception as exc:
                         error_message = f"An error occurred while running the {agent_name}: {exc}"
