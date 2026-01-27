@@ -1,6 +1,4 @@
-import os
-from google import genai
-
+import json
 from gemini_wrapper import call_gemini_with_retry
 
 def analyze_code_for_security(code_diff):
@@ -20,9 +18,19 @@ def analyze_code_for_security(code_diff):
     - Command Injection
     - Use of outdated or insecure libraries
 
-    If you find one or more vulnerabilities, describe each one clearly, explain the potential risk, and suggest a specific code change to fix it.
+    Output format:
+    [
+      {{
+        "file_path": "path/to/file.py",
+        "line_number": 15,
+        "suggestion": "api_key = os.getenv('KEY')",
+        "reason": "Hardcoded secret detected.",
+        "confidence": "High"
+      }}
+    ]
 
-    If you find NO security vulnerabilities, you MUST respond with the exact string: "No significant security vulnerabilities found."
+    If no issues, return [].
+    Output ONLY raw JSON.
 
     Here is the git diff:
     ```diff
@@ -30,8 +38,4 @@ def analyze_code_for_security(code_diff):
     ```
     """
 
-    try:
-        response = call_gemini_with_retry(prompt)
-        return response
-    except Exception as e:
-        return f"Security Agent Error: An exception occurred. {e}"
+    return call_gemini_with_retry(prompt, expect_json=True)

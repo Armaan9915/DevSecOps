@@ -1,40 +1,33 @@
-import os
-from google import genai
-from dotenv import load_dotenv
 from gemini_wrapper import call_gemini_with_retry
-load_dotenv()
 
-def analyze_for_best_practices(code_diff):
-    """Analyzes a git diff specifically for code quality and best practices."""
-    # try:
-    #     client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-    # except Exception as e:
-    #     return f"Best Practices Agent Error: Could not configure Gemini. {e}"
-    
+def analyze_code_for_security(code_diff):
+    """
+    Returns a list of security suggestions.
+    """
     prompt = f"""
-    You are a Senior Python Developer and an expert in writing clean, efficient, and maintainable code. Your sole task is to review the following git diff for violations of best practices.
+    You are a Security Expert. Analyze the git diff for vulnerabilities.
+    
+    Instead of a report, output a JSON list of specific suggestions.
+    
+    IMPORTANT: 
+    1. Use the line numbers from the 'Right' side of the diff (the new code).
+    2. "suggestion" must be the complete replacement code for that line/block.
+    
+    Output format:
+    [
+      {{
+        "file_path": "path/to/file.py",
+        "line_number": 15,
+        "suggestion": "api_key = os.getenv('KEY')",
+        "reason": "Hardcoded secret detected.",
+        "confidence": "High"
+      }}
+    ]
 
-    Analyze only the added lines (starting with '+'). Ignore all other lines.
-
-    Identify issues related to:
-    - Readability and PEP 8 compliance.
-    - Potential bugs or logical errors.
-    - Overly complex code that could be simplified.
-    - Performance bottlenecks.
-    - Lack of comments or unclear variable names.
-
-    For each issue you find, provide a specific suggestion for improvement.
-
-    If the code is well-written and follows best practices, you MUST respond with the exact string: "Code follows best practices. No major issues found."
-
-    Here is the git diff:
-    ```diff
+    If no issues, return [].
+    
+    Diff:
     {code_diff}
-    ```
     """
 
-    try:
-        response = call_gemini_with_retry(prompt)
-        return response
-    except Exception as e:
-        return f"Best Practices Agent Error: An exception occurred. {e}"
+    return call_gemini_with_retry(prompt, expect_json=True)

@@ -1,6 +1,7 @@
 import os
 import time
 from google import genai
+import json
 
 # Configure the API key once when the module is loaded
 # This is more efficient than configuring it on every call
@@ -12,7 +13,7 @@ try:
 except Exception as e:
     print(f"🔴 Error configuring Gemini in wrapper: {e}")
 
-def call_gemini_with_retry(prompt, max_retries=3):
+def call_gemini_with_retry(prompt, expect_json=False, max_retries=3):
     """
     Calls the Gemini API with a specific prompt and implements exponential backoff for retries.
     This makes the calls resilient to temporary service unavailability (e.g., 503 errors).
@@ -32,7 +33,21 @@ def call_gemini_with_retry(prompt, max_retries=3):
                 },
             )
             # If successful, return the text and exit the loop
-            return response.text
+            expect_json = response.text
+            
+            if expect_json:
+                # Clean up markdown code blocks if Gemini adds them
+                text = text.replace("```json", "").replace("```", "").strip()
+                # Validate JSON immediately
+                try:
+                    return json.loads(text)
+                except json.JSONDecodeError:
+                    print(f"⚠️ JSON Decode failed on attempt {attempt+1}")
+                    if attempt == max_retries - 1:
+                        return [] # Return empty list on failure
+                    continue # Retry
+
+            return text
         except Exception as e:
             error_message = str(e)
             # Check for the specific "overloaded" or "unavailable" error
