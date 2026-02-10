@@ -12,6 +12,16 @@ def analyze_for_database_issues(code_diff):
     - Improper use of transactions.
 
     If you find issues, explain the problem and suggest a fix. If none are found, respond with "No significant database issues found."
+    Output format:
+    [
+      {{
+        "file_path": "path/to/file.py",
+        "line_number": 15,
+        "suggestion": "Use parameterized queries or ORM methods.",
+        "reason": "Inefficient query detected.",
+        "confidence": "High"
+      }}
+    ]
 
     Here is the git diff:
     ```diff
